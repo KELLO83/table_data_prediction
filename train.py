@@ -4,53 +4,38 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
-import importlib.util
 import logging
 import sys
 from pathlib import Path
 from typing import Any
 
+from ml.src.experiments.tabular_config import parse_key_value, resolve_config
+from ml.src.experiments.tabular_runner import run_experiment
+from ml.src.models.candidates import (
+    EXPERIMENT_MODEL_NAMES,
+    FOUNDATION_MODEL_NAMES,
+    GBDT_MODEL_NAMES,
+    NEURAL_MODEL_NAMES,
+    SANITY_MODEL_NAMES,
+    TRANSFORMER_MODEL_NAMES,
+)
+
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
+if callable(stdout_reconfigure):
+    stdout_reconfigure(encoding="utf-8", errors="replace")
+stderr_reconfigure = getattr(sys.stderr, "reconfigure", None)
+if callable(stderr_reconfigure):
+    stderr_reconfigure(encoding="utf-8", errors="replace")
 
 LOGGER = logging.getLogger(__name__)
 
-SKLEARN_MODELS = ["dummy_mean", "dummy_median", "ridge"]
-GBDT_MODELS = ["lightgbm", "catboost"]
-NEURAL_MODELS = ["realmlp", "tabm", "tabr", "dcnv2", "node"]
-TRANSFORMER_MODELS = ["ft_transformer", "tab_transformer", "tabnet"]
-FOUNDATION_MODELS = ["tabpfn", "tabiclv2"]
-MODEL_CHOICES = SKLEARN_MODELS + GBDT_MODELS + NEURAL_MODELS + TRANSFORMER_MODELS + FOUNDATION_MODELS
+MODEL_CHOICES = list(EXPERIMENT_MODEL_NAMES)
 DEFAULT_CSV = ROOT / "superconductivity" / "openml_44964_superconductivity.csv"
 DEFAULT_TARGET = "critical_temp"
 DEFAULT_MODEL = "lightgbm"
-
-
-def parse_key_value(raw: str) -> tuple[str, Any]:
-    """Parse KEY=VALUE CLI overrides with basic scalar conversion."""
-    if "=" not in raw:
-        raise argparse.ArgumentTypeError(f"Expected KEY=VALUE, got: {raw}")
-    key, value = raw.split("=", 1)
-    value = value.strip()
-    lowered = value.lower()
-    if lowered in {"true", "false"}:
-        parsed: Any = lowered == "true"
-    elif lowered in {"none", "null"}:
-        parsed = None
-    else:
-        try:
-            parsed = int(value)
-        except ValueError:
-            try:
-                parsed = float(value)
-            except ValueError:
-                parsed = value
-    return key.strip(), parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -89,11 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     if args.list_models:
-        print("sklearn:", ", ".join(SKLEARN_MODELS))
-        print("gbdt:", ", ".join(GBDT_MODELS))
-        print("neural:", ", ".join(NEURAL_MODELS))
-        print("transformer:", ", ".join(TRANSFORMER_MODELS))
-        print("foundation:", ", ".join(FOUNDATION_MODELS))
+        print("candidate_gbdt:", ", ".join(GBDT_MODEL_NAMES))
+        print("candidate_neural:", ", ".join(NEURAL_MODEL_NAMES))
+        print("candidate_transformer:", ", ".join(TRANSFORMER_MODEL_NAMES))
+        print("candidate_foundation:", ", ".join(FOUNDATION_MODEL_NAMES))
+        print("supported_sanity_not_candidates:", ", ".join(SANITY_MODEL_NAMES))
         print("rule: one train.py run = one concrete model only")
         return
 
@@ -145,80 +130,11 @@ def _build_model_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _run_generic_tabular_mode(args: argparse.Namespace) -> dict[str, Any]:
-    module = _load_tabular_regression_module()
-    args = module.resolve_config(args)
+    args = resolve_config(args)
     params = _build_model_params(args)
-    df = module.read_csv(args.csv)
-    config = module.infer_columns(
-        df=df,
-        target=args.target,
-        features=module.parse_csv_list(args.features),
-        exclude=module.parse_csv_list(args.exclude),
-        categorical=module.parse_csv_list(args.categorical),
-    )
-    frame = module.clean_training_frame(df, config)
-    train_df, valid_df = module.train_test_split(frame, test_size=args.test_size, random_state=args.seed)
-
-    X_train = train_df[config.feature_columns].copy()
-    y_train = train_df[config.target].copy()
-    X_valid = valid_df[config.feature_columns].copy()
-    y_valid = valid_df[config.target].copy()
-
-    feature_set_name = module.register_runtime_feature_set(args, config)
-    model = module.build_model(
-        model_name=args.model,
-        numeric_columns=config.numeric_columns,
-        categorical_columns=config.categorical_columns,
-        params=params,
-        feature_set_name=feature_set_name,
-    )
-    import time
-    import numpy as np
-
-    start_train = time.perf_counter()
-    model.fit(X_train, y_train, X_valid, y_valid)
-    train_time = time.perf_counter() - start_train
-
-    start_predict = time.perf_counter()
-    pred = np.asarray(model.predict(X_valid), dtype=float)
-    predict_time = time.perf_counter() - start_predict
-    metrics = module.regression_metrics(y_valid, pred)
-    experiment_id = f"{args.csv.stem}_{args.target}_{args.model}_{len(train_df)}_seed{args.seed}"
-    row = {
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "experiment_id": experiment_id,
-        "csv": str(args.csv),
-        "target": args.target,
-        "model": args.model,
-        "rows": len(frame),
-        "train_rows": len(train_df),
-        "valid_rows": len(valid_df),
-        "feature_count": len(config.feature_columns),
-        "numeric_count": len(config.numeric_columns),
-        "categorical_count": len(config.categorical_columns),
-        "excluded_columns": module.json.dumps(config.excluded_columns, ensure_ascii=False),
-        "feature_columns": module.json.dumps(config.feature_columns, ensure_ascii=False),
-        "test_size": args.test_size,
-        "seed": args.seed,
-        "train_time_sec": round(train_time, 6),
-        "predict_time_sec": round(predict_time, 6),
-        **metrics,
-        "model_params": module.json.dumps(params, ensure_ascii=False),
-    }
-    module.append_result(args.output, row)
-    if args.save_predictions:
-        module.save_predictions(args.prediction_dir, experiment_id, valid_df, y_valid, pred)
-    return row
-
-
-def _load_tabular_regression_module():
-    path = ROOT / "ml" / "scripts" / "run_tabular_regression.py"
-    spec = importlib.util.spec_from_file_location("run_tabular_regression", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load generic tabular runner: {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    args.model_param = list(params.items())
+    args.config = None
+    return run_experiment(args)
 
 
 def _setup_logging(args: argparse.Namespace) -> None:

@@ -1,8 +1,6 @@
 # Model Tiers
 
-## Tier 0: Baseline
-
-Dummy regressors and Ridge are sanity baselines.
+## Tier 0: Serious Tree Baselines
 
 LightGBM is the first serious baseline for generic tabular regression.
 

@@ -6,6 +6,7 @@ import argparse
 import sys
 import traceback
 from pathlib import Path
+from typing import TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -15,26 +16,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ml.src.data import feature_registry
+from ml.src.models.candidates import EXPERIMENT_MODEL_NAMES
 from ml.src.models.registry import create_model
 
 
-DEFAULT_MODELS = [
-    "dummy_mean",
-    "dummy_median",
-    "ridge",
-    "lightgbm",
-    "catboost",
-    "realmlp",
-    "tabm",
-    "tabr",
-    "dcnv2",
-    "node",
-    "ft_transformer",
-    "tab_transformer",
-    "tabnet",
-    "tabpfn",
-    "tabiclv2",
-]
+DEFAULT_MODELS = list(EXPERIMENT_MODEL_NAMES)
+SmokeParam: TypeAlias = bool | int | str | tuple[int, ...]
 
 SMOKE_FEATURE_SET = "smoke_numeric"
 SMOKE_FEATURES = ["f0", "f1", "f2", "f3", "category"]
@@ -84,8 +71,8 @@ def make_dummy(n_rows: int) -> tuple[pd.DataFrame, pd.Series]:
     return X, y
 
 
-def smoke_params(model_name: str) -> dict[str, object]:
-    return {
+def smoke_params(model_name: str) -> dict[str, SmokeParam]:
+    params_by_model: dict[str, dict[str, SmokeParam]] = {
         "dummy_mean": {},
         "dummy_median": {},
         "ridge": {},
@@ -138,7 +125,8 @@ def smoke_params(model_name: str) -> dict[str, object]:
         },
         "tabpfn": {"device": "cpu"},
         "tabiclv2": {"device": "cpu", "verbose": False, "allow_auto_download": False},
-    }.get(model_name, {})
+    }
+    return params_by_model.get(model_name, {})
 
 
 if __name__ == "__main__":

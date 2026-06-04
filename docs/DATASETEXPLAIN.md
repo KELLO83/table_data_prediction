@@ -1,61 +1,50 @@
 # Dataset Explanation
 
-The active project is dataset-agnostic.
-
-Any CSV can be used when it defines:
+The active project compares tabular regression models across multiple dataset
+shapes. Every dataset must still satisfy the generic CSV contract:
 
 - feature columns
 - one numeric regression target
-- columns to exclude because they are identifiers, metadata, or leakage
+- explicit exclusions for identifiers, metadata, and leakage columns
 
-## Current Local Sample
+## Primary Experiments
 
-AI Hub experimental materials property data:
+| Dataset | OpenML id | Domain | Shape | Target | Main Risk |
+|---|---:|---|---|---|---|
+| superconductivity | 44964 | materials/science | 21,263 rows, 82 numeric columns including target | `critical_temp` | dense numeric nonlinear interactions |
+| Allstate_Claims_Severity | 42571 | insurance | 188,318 rows, 116 symbolic features plus numeric columns | `loss` | categorical-heavy encoding and target skew |
+| SGEMM_GPU_kernel_performance | 43144 | HPC performance | 241,600 rows, 18 numeric columns | `Run1` | large numeric runtime/memory and repeated timing columns |
 
-```text
-Experimental materials property data/
-  01.원천데이터/
-  02.라벨링데이터/
-    Resistivity_data.csv
-    Hardness_data.csv
-    Amorphous_data.csv
-```
+## Expansion Experiments
 
-Recommended regression tasks:
+| Dataset | OpenML id | Domain | Shape | Target | Main Risk |
+|---|---:|---|---|---|---|
+| Mercedes_Benz_Greener_Manufacturing | 42570 | manufacturing | 4,209 rows, mixed high-cardinality categoricals and many numeric/binary columns | `y` | small sample overfitting and `ID` exclusion |
+| Santander_transaction_value | 42572 | finance | 4,459 rows, 4,992 numeric features plus string `ID` | `target` | high-dimensional sparse-ish numeric features |
 
-- `Resistivity_data.csv` -> target `Resistivity`
-- `Hardness_data.csv` -> target `Hardness`
+## Current Local Dataset
 
-`Amorphous_data.csv` is a classification-style 0/1 target and is not the primary regression task.
-
-## Resistivity Features
-
-Use:
+The ready-to-run local dataset is:
 
 ```text
-Al, Ti, Cr, Fe, Co, Ni, Cu, Zr, Mo, W, Mn, Si, Mg,
-Resistance, Thickness,
-ravg, delta, dHmix, ENavg, dEN, N
+superconductivity/openml_44964_superconductivity.csv
 ```
 
-Exclude:
+Use all 81 non-target features for final superconductivity model comparison.
+Five-seed LightGBM feature validation found the full feature set strongest:
 
 ```text
-Number, X, Y, Ex_resistivity, Compo
+all_81 RMSE mean = 9.227177
+top_50_gain RMSE mean = 9.254649
+corr_filtered_58 RMSE mean = 9.260771
 ```
 
-## Hardness Features
+## Dataset Preparation Rules
 
-Use:
-
-```text
-Al, Ti, Cr, Fe, Co, Ni, Cu, Zr, Mo, W, Mn, Si, Mg, Re, Ta,
-Thickness,
-ravg, delta, dHmix, ENavg, dEN, N
-```
-
-Exclude:
-
-```text
-Number, X, Y, Compo, Modulus
-```
+- Keep one config per dataset/model once data is downloaded or converted.
+- Exclude row id columns such as `id` and `ID`.
+- For SGEMM, do not use `Run2`, `Run3`, or `Run4` as inputs when predicting
+  `Run1` unless the task is explicitly redefined as repeated-measurement
+  prediction.
+- Record OpenML id, target, row count, feature count, categorical columns,
+  excluded columns, and missing-value count in every experiment note.

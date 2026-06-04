@@ -53,7 +53,7 @@ DEFAULT_FIELDNAMES = [
 
 
 def _serialize(value: Any) -> Any:
-    if is_dataclass(value):
+    if is_dataclass(value) and not isinstance(value, type):
         return asdict(value)
     if isinstance(value, (dict, list, tuple)):
         return json.dumps(value, ensure_ascii=False, default=_serialize)
