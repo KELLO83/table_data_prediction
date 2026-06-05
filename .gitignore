@@ -101,6 +101,7 @@ logs/
 *.log
 
 # IDE / Editor
+.[!.]*/
 .vscode/
 .idea/
 .claude/
