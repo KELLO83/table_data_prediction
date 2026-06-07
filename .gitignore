@@ -21,10 +21,11 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-*.png
-*.jpg
-*.json
-*.txt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # Virtual Environment
 .env
@@ -38,7 +39,16 @@ ENV/
 env.bak/
 venv.bak/
 
-opencode_backup.json
+# Node / Next.js
+web/node_modules/
+web/.next/
+web/out/
+web/.turbo/
+web/.vercel/
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+web/pnpm-debug.log*
 
 # Environment Variables / Configuration
 .env
@@ -50,6 +60,7 @@ config.json
 secrets.json
 .secrets/
 tabpfn_token*
+opencode_backup.json
 
 # Data / Databases
 /data/
@@ -60,6 +71,8 @@ tabpfn_token*
 /models/
 /model_artifacts/
 artifacts/
+!docs/llm_wiki/experiment_notes/artifacts/
+!docs/llm_wiki/experiment_notes/artifacts/**
 GNN_Neural_Network/data/
 experiments/**/artifacts/datasets/
 experiments/**/artifacts/**/*.xlsx
@@ -95,15 +108,30 @@ GNN_Neural_Network/artifacts/experiments/**/*pairs*.csv
 *.sqlite3
 *.db
 *.neo4j
+superconductivity/openml_*.csv
+superconductivity/feature_selection_results/**/*.csv
+superconductivity/feature_selection_results/**/*.json
+superconductivity/feature_selection_results/**/*.txt
+superconductivity/feature_selection_results/**/*.png
+superconductivity/feature_selection_results/**/*.pkl
+superconductivity/feature_selection_results/**/*.pickle
+superconductivity/feature_selection_results/**/*.npy
+superconductivity/feature_selection_results/**/*.npz
 
 # Logs
 logs/
 *.log
 
+# Local verification artifacts
+industrial-tabular-regression-lab*.png
+playwright-report/
+test-results/
+coverage/
+
 # IDE / Editor
-.[!.]*/
 .vscode/
 .idea/
+.cursor/
 .claude/
 .serena/
 *.swp
@@ -117,5 +145,6 @@ Thumbs.db
 .sisyphus/
 .codex
 .playwright-mcp/
+.codegraph/
 # Added by code-review-graph
 .code-review-graph/

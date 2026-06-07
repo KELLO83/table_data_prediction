@@ -34,6 +34,28 @@ class SdpaPatchReport:
         )
 
 
+@dataclass(frozen=True)
+class SdpaBackendLogSpec:
+    module: Any
+    batch_size: int
+    tokens: int
+    dtype: Any
+    device: str
+    training: bool
+    label: str
+
+
+@dataclass(frozen=True)
+class SdpaBackendChoice:
+    module: Any
+    query: Any
+    key: Any
+    value: Any
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
+    label: str
+
+
 def apply_sdpa_to_model(module: Any) -> SdpaPatchReport:
     """Patch all ``nn.MultiheadAttention`` children to default to SDPA.
 
@@ -97,32 +119,33 @@ def maybe_apply_sdpa(target: Any, enabled: bool = True) -> SdpaPatchReport:
     return apply_sdpa_to_estimator(target)
 
 
-def log_sdpa_backend_for_model(
-    module: Any,
-    *,
-    batch_size: int,
-    tokens: int,
-    dtype: Any,
-    device: str,
-    training: bool,
-    label: str,
-) -> None:
+def log_sdpa_backend_for_model(spec: SdpaBackendLogSpec) -> None:
     """Log expected SDPA backend for all MHA modules using representative metadata."""
 
     torch, functional = _torch_with_sdpa()
-    if torch is None or functional is None or not isinstance(module, torch.nn.Module):
-        LOGGER.info("%s SDPA backend: unavailable", label)
+    if torch is None or functional is None or not isinstance(spec.module, torch.nn.Module):
+        LOGGER.info("%s SDPA backend: unavailable", spec.label)
         return
-    for index, child in enumerate(child for child in module.modules() if isinstance(child, torch.nn.MultiheadAttention)):
+    for index, child in enumerate(child for child in spec.module.modules() if isinstance(child, torch.nn.MultiheadAttention)):
         shape = (
-            (batch_size, tokens, int(child.embed_dim))
+            (spec.batch_size, spec.tokens, int(child.embed_dim))
             if bool(getattr(child, "batch_first", False))
-            else (tokens, batch_size, int(child.embed_dim))
+            else (spec.tokens, spec.batch_size, int(child.embed_dim))
         )
-        query = torch.empty(shape, device=device, dtype=dtype)
+        query = torch.empty(shape, device=spec.device, dtype=spec.dtype)
         was_training = child.training
-        child.train(training)
-        _log_sdpa_backend_choice(child, query, query, query, (), {"need_weights": False}, f"{label}.mha{index}")
+        child.train(spec.training)
+        _log_sdpa_backend_choice(
+            SdpaBackendChoice(
+                module=child,
+                query=query,
+                key=query,
+                value=query,
+                args=(),
+                kwargs={"need_weights": False},
+                label=f"{spec.label}.mha{index}",
+            )
+        )
         child.train(was_training)
         child._secanday_sdpa_backend_logged = True
 
@@ -136,7 +159,7 @@ def _patch_multihead_attention(module: Any) -> None:
         need_weights = _resolve_need_weights(args, kwargs)
         torch, _ = _torch_with_sdpa()
         if not need_weights and not getattr(self, "_secanday_sdpa_backend_logged", False) and not _torch_is_compiling(torch):
-            _log_sdpa_backend_choice(self, query, key, value, args, kwargs, type(self).__name__)
+            _log_sdpa_backend_choice(SdpaBackendChoice(self, query, key, value, args, kwargs, type(self).__name__))
             self._secanday_sdpa_backend_logged = True
         return original_forward(query, key, value, *args, **kwargs)
 
@@ -154,30 +177,30 @@ def _resolve_need_weights(args: tuple[Any, ...], kwargs: dict[str, Any]) -> bool
     return True
 
 
-def _log_sdpa_backend_choice(module: Any, query: Any, key: Any, value: Any, args: tuple[Any, ...], kwargs: dict[str, Any], label: str) -> None:
+def _log_sdpa_backend_choice(choice: SdpaBackendChoice) -> None:
     torch, functional = _torch_with_sdpa()
     if torch is None or functional is None:
-        LOGGER.info("%s SDPA backend: unavailable; torch SDPA is not present.", label)
+        LOGGER.info("%s SDPA backend: unavailable; torch SDPA is not present.", choice.label)
         return
-    if not getattr(query, "is_cuda", False):
+    if not getattr(choice.query, "is_cuda", False):
         LOGGER.info(
             "%s SDPA backend: expected=math device=%s dtype=%s reason=non-CUDA query",
-            label,
-            getattr(query, "device", "unknown"),
-            getattr(query, "dtype", "unknown"),
+            choice.label,
+            getattr(choice.query, "device", "unknown"),
+            getattr(choice.query, "dtype", "unknown"),
         )
         return
 
-    batch, q_tokens = _batch_and_tokens(module, query)
-    _, k_tokens = _batch_and_tokens(module, key)
-    heads = int(getattr(module, "num_heads", 1))
-    head_dim = int(getattr(module, "head_dim", query.shape[-1] // max(heads, 1)))
-    dropout_p = float(getattr(module, "dropout", 0.0)) if bool(getattr(module, "training", False)) else 0.0
-    is_causal = bool(kwargs.get("is_causal", args[4] if len(args) >= 5 else False))
+    batch, q_tokens = _batch_and_tokens(choice.module, choice.query)
+    _, k_tokens = _batch_and_tokens(choice.module, choice.key)
+    heads = int(getattr(choice.module, "num_heads", 1))
+    head_dim = int(getattr(choice.module, "head_dim", choice.query.shape[-1] // max(heads, 1)))
+    dropout_p = float(getattr(choice.module, "dropout", 0.0)) if bool(getattr(choice.module, "training", False)) else 0.0
+    is_causal = bool(choice.kwargs.get("is_causal", choice.args[4] if len(choice.args) >= 5 else False))
 
-    representative_query = torch.empty((batch, heads, q_tokens, head_dim), device=query.device, dtype=query.dtype)
-    representative_key = torch.empty((batch, heads, k_tokens, head_dim), device=key.device, dtype=key.dtype)
-    representative_value = torch.empty((batch, heads, k_tokens, head_dim), device=value.device, dtype=value.dtype)
+    representative_query = torch.empty((batch, heads, q_tokens, head_dim), device=choice.query.device, dtype=choice.query.dtype)
+    representative_key = torch.empty((batch, heads, k_tokens, head_dim), device=choice.key.device, dtype=choice.key.dtype)
+    representative_value = torch.empty((batch, heads, k_tokens, head_dim), device=choice.value.device, dtype=choice.value.dtype)
     params = torch.backends.cuda.SDPAParams(
         representative_query,
         representative_key,
@@ -191,7 +214,7 @@ def _log_sdpa_backend_choice(module: Any, query: Any, key: Any, value: Any, args
     expected = _expected_sdpa_backend(torch, candidates)
     LOGGER.info(
         "%s SDPA backend: expected=%s candidates=%s priority=%s shape=(batch=%s, heads=%s, q_tokens=%s, k_tokens=%s, head_dim=%s) dtype=%s dropout=%s causal=%s",
-        label,
+        choice.label,
         expected,
         candidates,
         _sdp_priority_order(torch),
@@ -200,7 +223,7 @@ def _log_sdpa_backend_choice(module: Any, query: Any, key: Any, value: Any, args
         q_tokens,
         k_tokens,
         head_dim,
-        query.dtype,
+        choice.query.dtype,
         dropout_p,
         is_causal,
     )

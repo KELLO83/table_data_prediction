@@ -68,3 +68,13 @@ well represented by this registry.
 - feature columns and excluded columns are logged
 - metrics include RMSE, MAE, MAPE, WAPE
 - no dataset-specific assumptions are required in `train.py`
+
+## Portfolio Dashboard Extension
+
+The frontend product surface is specified in
+`docs/INDUSTRIAL_TABULAR_REGRESSION_LAB_PRD.md`.
+
+Industrial Tabular Regression Lab is a read-only Next.js dashboard that presents
+experiment results, dataset shape, runtime acceleration settings, and LLM Wiki
+findings. Training remains in the Python CLI pipeline; the dashboard consumes
+result artifacts after runs complete.

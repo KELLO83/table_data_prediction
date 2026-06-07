@@ -45,15 +45,26 @@ Chronological wiki changes are recorded in `LOG.md`.
 
 | Concept | Note |
 |---|---|
+| Current experiment findings | `concepts/current_experiment_findings.md` |
 | Benchmark dataset matrix | `concepts/benchmark_dataset_matrix.md` |
 | Model selection by table shape | `concepts/model_selection_by_table_shape.md` |
 | Model candidate profiles | `concepts/model_candidate_profiles_ko.md` |
+| Runtime acceleration ablation protocol | `concepts/runtime_acceleration_ablation_protocol.md` |
 
 ## Experiment Notes
 
 | Date | Run | Note |
 |---|---|---|
+| 2026-06-07 | Runtime acceleration baseline plan | `experiment_notes/runtime/2026-06-07-runtime-acceleration-baseline-plan.md` |
 | 2026-06-04 | Initial wiki setup | `experiment_notes/2026-06-04-initial-wiki-setup.md` |
+
+## Experiment Artifact Roots
+
+| Scope | Folder |
+|---|---|
+| Runtime acceleration | `experiment_notes/artifacts/runtime/` |
+| Dataset-scoped results | `experiment_notes/artifacts/datasets/` |
+| Model-family diagnostics | `experiment_notes/artifacts/models/` |
 
 ## Claim Boundaries
 
@@ -62,3 +73,5 @@ Chronological wiki changes are recorded in `LOG.md`.
   split, metric, feature exclusions, and runtime environment.
 - Treat MAPE as diagnostic only when targets can be zero or near zero.
 - Exclude row IDs and post-target/leakage columns explicitly in every config.
+- Runtime comparisons must name AMP, SDPA, compile, matmul precision, batch size,
+  device, and SDPA backend diagnostics.
