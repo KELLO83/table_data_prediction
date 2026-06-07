@@ -148,7 +148,14 @@ export function DashboardClient({ data }: { data: DashboardData }) {
 
         <section className="twoColumn">
           <Panel title="Model Frontier" action={`${filteredResults.length} filtered runs`}>
-            {filteredResults.length > 0 ? <FrontierChart results={filteredResults} /> : <EmptyResultState />}
+            {filteredResults.length > 0 ? (
+              <>
+                <FrontierChart results={filteredResults} />
+                <FamilyLegend results={filteredResults} />
+              </>
+            ) : (
+              <EmptyResultState />
+            )}
           </Panel>
           <Panel title="Benchmark Coverage" action={`${data.summary.datasetCoverage}/${data.datasets.length}`}>
             <div className="coverageList">
@@ -328,7 +335,7 @@ function ModelRegistry({ models }: { models: ModelProfile[] }) {
   return (
     <div className="modelGrid">
       {models.map((model) => (
-        <article className="modelCard" key={model.name}>
+        <article className={`modelCard ${model.family}`} key={model.name}>
           <div className="modelCardHeader">
             <div>
               <strong>{model.name}</strong>
@@ -345,6 +352,21 @@ function ModelRegistry({ models }: { models: ModelProfile[] }) {
             <dd>{model.runtimeNotes}</dd>
           </dl>
         </article>
+      ))}
+    </div>
+  );
+}
+
+function FamilyLegend({ results }: { results: ExperimentResult[] }) {
+  const families = Array.from(new Set(results.map((result) => result.family)));
+
+  return (
+    <div className="familyLegend" aria-label="Model family legend">
+      {families.map((family) => (
+        <span key={family}>
+          <i style={{ backgroundColor: FAMILY_COLORS[family] ?? FAMILY_COLORS.unknown }} />
+          {family}
+        </span>
       ))}
     </div>
   );
