@@ -9,6 +9,7 @@ import pandas as pd
 
 from ml.src.data import feature_registry
 from ml.src.models.base import BaseModel
+from ml.src.models.torch_sdpa import SdpaPatchReport, maybe_apply_sdpa
 
 
 class DCNV2Model(BaseModel):
@@ -26,6 +27,7 @@ class DCNV2Model(BaseModel):
             "embedding_dim": 8,
             "learning_rate": 1e-3,
             "verbose": 1,
+            "enable_sdpa": True,
             **(params or {}),
         }
         if "max_epochs" in params:
@@ -47,6 +49,7 @@ class DCNV2Model(BaseModel):
         self.model_cls = DCNMix
         self.torch = torch
         self.model: Any | None = None
+        self.sdpa_patch_report = SdpaPatchReport.disabled("model is not initialized")
         self.category_maps: dict[str, dict[str, int]] = {}
         self.numeric_medians: dict[str, float] = {}
         self.numeric_means: dict[str, float] = {}
@@ -79,6 +82,7 @@ class DCNV2Model(BaseModel):
             device=self.params["device"],
             seed=int(self.params["random_state"]),
         )
+        self.sdpa_patch_report = maybe_apply_sdpa(self.model, enabled=bool(self.params["enable_sdpa"]))
         optimizer = self.torch.optim.Adam(self.model.parameters(), lr=float(self.params["learning_rate"]))
         self.model.compile(optimizer, "mse", metrics=["mse"])
         validation_data = None
@@ -96,6 +100,7 @@ class DCNV2Model(BaseModel):
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         if self.model is None:
             raise RuntimeError("DCNV2Model is not fitted")
+        self.sdpa_patch_report = maybe_apply_sdpa(self.model, enabled=bool(self.params["enable_sdpa"]))
         return np.asarray(
             self.model.predict(self._transform(X), batch_size=int(self.params["batch_size"])),
             dtype=float,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import numpy as np
@@ -10,6 +11,21 @@ from tqdm.auto import tqdm
 
 from ml.src.data import feature_registry
 from ml.src.models.base import BaseModel
+from ml.src.models.torch_sdpa import SdpaPatchReport, log_sdpa_backend_for_model, maybe_apply_sdpa
+from ml.src.models.torch_runtime import (
+    CompileReport,
+    autocast_context,
+    configure_matmul_precision,
+    log_amp_settings,
+    make_grad_scaler,
+    maybe_compile_model,
+    resolve_amp_dtype,
+    should_enable_amp,
+    total_train_steps,
+)
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class TabTransformerModel(BaseModel):
@@ -25,6 +41,19 @@ class TabTransformerModel(BaseModel):
             "epochs": 50,
             "batch_size": 2048,
             "learning_rate": 1e-3,
+            "enable_sdpa": True,
+            "enable_amp": True,
+            "amp_dtype": "float16",
+            "enable_compile": "auto",
+            "compile_mode": "reduce-overhead",
+            "compile_min_steps": 200,
+            "compile_fullgraph": None,
+            "compile_dynamic": None,
+            "compile_strict": False,
+            "matmul_precision": "high",
+            "pin_memory": True,
+            "non_blocking": True,
+            "num_workers": 0,
             **(params or {}),
         }
         super().__init__({"feature_set": feature_set, "params": params, "training_mode": "from_scratch"})
@@ -38,6 +67,8 @@ class TabTransformerModel(BaseModel):
         self.torch = torch
         self.model_cls = TabTransformer
         self.model: Any | None = None
+        self.sdpa_patch_report = SdpaPatchReport.disabled("model is not initialized")
+        self.compile_report = CompileReport(enabled=False, reason="model is not initialized")
         self.category_maps: dict[str, dict[str, int]] = {}
         self.numeric_medians: dict[str, float] = {}
         self.numeric_means: dict[str, float] = {}
@@ -54,6 +85,22 @@ class TabTransformerModel(BaseModel):
             depth=int(self.params["depth"]),
             heads=int(self.params["heads"]),
         ).to(self.params["device"])
+        configure_matmul_precision(self.torch, str(self.params["matmul_precision"]), str(self.params["device"]), self.name)
+        self.sdpa_patch_report = maybe_apply_sdpa(self.model, enabled=bool(self.params["enable_sdpa"]))
+        LOGGER.info("%s SDPA patch: %s", self.name, self.sdpa_patch_report)
+        sdpa_dtype = resolve_amp_dtype(self.torch, str(self.params["amp_dtype"])) if should_enable_amp(self.torch, self.params) else self.torch.float32
+        log_sdpa_backend_for_model(
+            self.model,
+            batch_size=min(int(self.params["batch_size"]), len(X_train)),
+            tokens=len(categories),
+            dtype=sdpa_dtype,
+            device=str(self.params["device"]),
+            training=True,
+            label=self.name,
+        )
+        total_steps = total_train_steps(len(X_train), int(self.params["batch_size"]), int(self.params["epochs"]))
+        self.model, self.compile_report = maybe_compile_model(self.torch, self.model, self.params, total_steps, self.name)
+        log_amp_settings(self.torch, self.params, self.name)
         self._train_torch_model(x_cat, x_num, y_train.to_numpy(dtype=np.float32))
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
@@ -63,12 +110,13 @@ class TabTransformerModel(BaseModel):
         self.model.eval()
         preds = []
         batch_size = int(self.params["batch_size"])
-        with self.torch.no_grad():
+        with self.torch.inference_mode():
             for start in range(0, len(X), batch_size):
-                out = self.model(
-                    self.torch.as_tensor(x_cat[start : start + batch_size], dtype=self.torch.long, device=self.params["device"]),
-                    self.torch.as_tensor(x_num[start : start + batch_size], dtype=self.torch.float32, device=self.params["device"]),
-                )
+                with autocast_context(self.torch, self.params):
+                    out = self.model(
+                        self.torch.as_tensor(x_cat[start : start + batch_size], dtype=self.torch.long, device=self.params["device"]),
+                        self.torch.as_tensor(x_num[start : start + batch_size], dtype=self.torch.float32, device=self.params["device"]),
+                    )
                 preds.append(out.detach().cpu().numpy().reshape(-1))
         return np.concatenate(preds)
 
@@ -79,19 +127,30 @@ class TabTransformerModel(BaseModel):
             self.torch.as_tensor(x_num, dtype=self.torch.float32),
             self.torch.as_tensor(y.reshape(-1, 1), dtype=self.torch.float32),
         )
-        loader = self.torch.utils.data.DataLoader(dataset, batch_size=int(self.params["batch_size"]), shuffle=True)
+        pin_memory = bool(self.params["pin_memory"]) and str(self.params["device"]).lower().startswith("cuda")
+        non_blocking = bool(self.params["non_blocking"]) and pin_memory
+        loader = self.torch.utils.data.DataLoader(
+            dataset,
+            batch_size=int(self.params["batch_size"]),
+            shuffle=True,
+            num_workers=int(self.params["num_workers"]),
+            pin_memory=pin_memory,
+        )
         optimizer = self.torch.optim.AdamW(self.model.parameters(), lr=float(self.params["learning_rate"]))
         loss_fn = self.torch.nn.MSELoss()
+        scaler = make_grad_scaler(self.torch, self.params)
         self.model.train()
         for _ in tqdm(range(int(self.params["epochs"])), desc="tab_transformer epochs"):
             for batch_cat, batch_num, batch_y in loader:
-                batch_cat = batch_cat.to(self.params["device"])
-                batch_num = batch_num.to(self.params["device"])
-                batch_y = batch_y.to(self.params["device"])
+                batch_cat = batch_cat.to(self.params["device"], non_blocking=non_blocking)
+                batch_num = batch_num.to(self.params["device"], non_blocking=non_blocking)
+                batch_y = batch_y.to(self.params["device"], non_blocking=non_blocking)
                 optimizer.zero_grad(set_to_none=True)
-                loss = loss_fn(self.model(batch_cat, batch_num), batch_y)
-                loss.backward()
-                optimizer.step()
+                with autocast_context(self.torch, self.params):
+                    loss = loss_fn(self.model(batch_cat, batch_num), batch_y)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
     def _fit_transform(self, X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
         for col in feature_registry.get_categorical_columns(self.feature_set):

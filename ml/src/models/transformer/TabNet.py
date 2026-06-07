@@ -9,6 +9,7 @@ import pandas as pd
 
 from ml.src.data.preprocessing import build_sklearn_preprocessor
 from ml.src.models.base import BaseModel
+from ml.src.models.torch_sdpa import SdpaPatchReport, maybe_apply_sdpa
 
 
 class TabNetModel(BaseModel):
@@ -26,6 +27,7 @@ class TabNetModel(BaseModel):
             "max_epochs": 50,
             "batch_size": 2048,
             "virtual_batch_size": 256,
+            "enable_sdpa": True,
             **(params or {}),
         }
         super().__init__({"feature_set": feature_set, "params": params, "training_mode": "from_scratch"})
@@ -42,6 +44,7 @@ class TabNetModel(BaseModel):
         self.params = params
         self.preprocessor = build_sklearn_preprocessor(feature_set)
         self.model = TabNetRegressor(**model_params)
+        self.sdpa_patch_report = SdpaPatchReport.disabled("model is not initialized")
 
     def fit(
         self,
@@ -65,8 +68,10 @@ class TabNetModel(BaseModel):
             batch_size=int(self.params["batch_size"]),
             virtual_batch_size=int(self.params["virtual_batch_size"]),
         )
+        self.sdpa_patch_report = maybe_apply_sdpa(self.model, enabled=bool(self.params["enable_sdpa"]))
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
+        self.sdpa_patch_report = maybe_apply_sdpa(self.model, enabled=bool(self.params["enable_sdpa"]))
         return np.asarray(self.model.predict(_to_dense(self.preprocessor.transform(X))), dtype=float).reshape(-1)
 
 

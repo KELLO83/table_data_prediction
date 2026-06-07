@@ -9,6 +9,7 @@ import pandas as pd
 
 from ml.src.data import feature_registry
 from ml.src.models.base import BaseModel
+from ml.src.models.torch_sdpa import SdpaPatchReport, maybe_apply_sdpa
 
 
 class NodeModel(BaseModel):
@@ -32,6 +33,7 @@ class NodeModel(BaseModel):
             "progress_bar": "simple",
             "num_workers": 0,
             "pin_memory": True,
+            "enable_sdpa": True,
             **(params or {}),
         }
         super().__init__({"feature_set": feature_set, "params": params, "training_mode": "from_scratch"})
@@ -52,6 +54,7 @@ class NodeModel(BaseModel):
         self.TrainerConfig = TrainerConfig
         self.NodeConfig = NodeConfig
         self.model: Any | None = None
+        self.sdpa_patch_report = SdpaPatchReport.disabled("model is not initialized")
 
     def fit(
         self,
@@ -108,10 +111,12 @@ class NodeModel(BaseModel):
             trainer_config=trainer_config,
         )
         self.model.fit(train_df, validation=valid_df)
+        self.sdpa_patch_report = maybe_apply_sdpa(self.model, enabled=bool(self.params["enable_sdpa"]))
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         if self.model is None:
             raise RuntimeError("NodeModel is not fitted")
+        self.sdpa_patch_report = maybe_apply_sdpa(self.model, enabled=bool(self.params["enable_sdpa"]))
         predictions = self.model.predict(X, progress_bar=str(self.params["progress_bar"]))
         column = next((col for col in predictions.columns if col.endswith("_prediction")), "")
         if column not in predictions.columns:

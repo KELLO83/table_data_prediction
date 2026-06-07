@@ -12,6 +12,7 @@ from sklearn.pipeline import Pipeline
 
 from ml.src.data.preprocessing import build_sklearn_preprocessor
 from ml.src.models.base import BaseModel
+from ml.src.models.torch_sdpa import SdpaPatchReport, maybe_apply_sdpa
 
 
 PROJECT_TABPFN_TOKEN_PATH = Path(__file__).resolve().parents[4] / ".secrets" / "tabpfn_token"
@@ -27,6 +28,7 @@ class TabPFNModel(BaseModel):
         params = {
             "device": "cuda",
             "random_state": 42,
+            "enable_sdpa": True,
             **(params or {}),
         }
         version = str(params.pop("version", DEFAULT_TABPFN_VERSION))
@@ -50,7 +52,7 @@ class TabPFNModel(BaseModel):
         constructor_params = {
             key: value
             for key, value in params.items()
-            if key not in {"checkpoint", "token_path"}
+            if key not in {"checkpoint", "enable_sdpa", "token_path"}
         }
         self.pipeline = Pipeline(
             steps=[
@@ -58,6 +60,7 @@ class TabPFNModel(BaseModel):
                 ("model", TabPFNRegressor(**constructor_params)),
             ]
         )
+        self.sdpa_patch_report = SdpaPatchReport.disabled("model is not initialized")
 
     def fit(
         self,
@@ -73,8 +76,16 @@ class TabPFNModel(BaseModel):
                 "~/.cache/tabpfn/auth_token or ~/.tabpfn/token, or pass a local model_path/checkpoint."
             )
         self.pipeline.fit(X_train, y_train)
+        self.sdpa_patch_report = maybe_apply_sdpa(
+            self.pipeline.named_steps["model"],
+            enabled=bool(self.config["params"].get("enable_sdpa", True)),
+        )
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
+        self.sdpa_patch_report = maybe_apply_sdpa(
+            self.pipeline.named_steps["model"],
+            enabled=bool(self.config["params"].get("enable_sdpa", True)),
+        )
         return np.asarray(self.pipeline.predict(X), dtype=float)
 
 
